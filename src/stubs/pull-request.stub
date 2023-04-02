@@ -1,0 +1,11 @@
+name: Pull Requests
+
+on:
+  pull_request:
+
+jobs:
+  code-checks:
+    name: Code Checks
+    uses: ./.github/workflows/ci-checks.yml
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,219 @@
+name: CI Checks
+
+on:
+  workflow_call:
+    secrets:
+      token:
+        required: true
+
+jobs:
+  build-deps:
+    name: Build
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: shivammathur/setup-php@15c43e89cdef867065b0213be354c2841860869e
+        with:
+          php-version: "{php-version}"
+
+      - uses: actions/checkout@v2
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
+
+      - name: Cache dependencies
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install PHP Dependencies
+        run: composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+      - name: Install JS Dependencies
+        run: echo "##[set-output name=NVMRC;]$(cat .nvmrc)"
+        id: nvm
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: "${{ steps.nvm.outputs.NVMRC }}"
+          cache: 'npm'
+      - run: npm install
+  scan:
+    name: NPM Audit
+
+    runs-on: ubuntu-22.04
+
+    needs: [build-deps]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install JS Dependencies
+        run: echo "##[set-output name=NVMRC;]$(cat .nvmrc)"
+        id: nvm
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: "${{ steps.nvm.outputs.NVMRC }}"
+          cache: 'npm'
+      - run: npm ci
+
+      - uses: oke-py/npm-audit-action@v2
+        with:
+          github_token: ${{ secrets.token }}
+          create_issues: true
+          dedupe_issues: true
+
+  larastan:
+    name: Run Larastan
+
+    runs-on: ubuntu-22.04
+
+    needs: [build-deps]
+
+    steps:
+      - uses: shivammathur/setup-php@15c43e89cdef867065b0213be354c2841860869e
+        with:
+          php-version: "{php-version}"
+
+      - uses: actions/checkout@v2
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
+
+      - name: Cache dependencies
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install PHP Dependencies
+        run: composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+      - name: Install JS Dependencies
+        run: echo "##[set-output name=NVMRC;]$(cat .nvmrc)"
+        id: nvm
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: "${{ steps.nvm.outputs.NVMRC }}"
+          cache: 'npm'
+      - run: npm install
+
+      - name: Build Assets
+        run: npm run build
+
+      - name: Analyse the code with Larastan
+        run: composer static-analysis
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-22.04
+
+    needs: [build-deps]
+
+    env:
+      DB_PORT: 3306
+      DB_HOST: 127.0.0.1
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      DB_DATABASE: allocations
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ env.DB_PASSWORD }}
+          MYSQL_DATABASE: ${{ env.DB_DATABASE }}
+        ports:
+          - 3306/tcp
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+    steps:
+      - uses: shivammathur/setup-php@15c43e89cdef867065b0213be354c2841860869e
+        with:
+          php-version: "{php-version}"
+
+      - uses: actions/checkout@v2
+
+      - name: Start Mysql
+        run: sudo service mysql start
+
+      - name: Create Database
+        run: mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS allocations"
+
+      - name: Copy .env
+        run: php -r "file_exists('.env') || copy('.env.example', '.env');"
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "::set-output name=dir::$(composer config cache-files-dir)"
+
+      - name: Cache dependencies
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install PHP Dependencies
+        run: composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+      - name: Install JS Dependencies
+        run: echo "##[set-output name=NVMRC;]$(cat .nvmrc)"
+        id: nvm
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: "${{ steps.nvm.outputs.NVMRC }}"
+          cache: 'npm'
+      - run: npm install
+
+      - name: Build Assets
+        run: npm run build
+
+      - name: Generate key
+        run: php artisan key:generate
+
+      - name: Clear Config
+        run: php artisan config:clear
+
+      - name: Directory Permissions
+        run: chmod -R 777 storage bootstrap/cache
+
+      - name: Run Migrations
+        run: php artisan migrate --force
+
+      - name: Check route integrity
+        run: php artisan route:list
+
+      - name: Execute tests (Unit and Feature tests) via PHPUnit
+        run: php artisan test --configuration phpunit-ci.xml
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: shivammathur/setup-php@15c43e89cdef867065b0213be354c2841860869e
+        with:
+          php-version: "{php-version}"
+
+      - uses: actions/checkout@v2
+
+      - name: Install Dependencies
+        run: composer install
+
+      - name: Pint
+        run: composer check-style
