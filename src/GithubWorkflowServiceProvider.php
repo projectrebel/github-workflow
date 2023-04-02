@@ -17,9 +17,6 @@ class GithubWorkflowServiceProvider extends PackageServiceProvider
          */
         $package
             ->name('github-workflow')
-            ->hasConfigFile()
-            ->hasViews()
-            ->hasMigration('create_github-workflow_table')
             ->hasCommand(GithubWorkflowCommand::class);
     }
 }
